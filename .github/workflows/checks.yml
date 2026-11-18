@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: ${{ matrix.node }}
-      - run: sudo apt-get update -qq && sudo apt-get install -y ffmpeg
+      - run: command -v ffmpeg || (sudo timeout 120 apt-get update -qq && sudo timeout 120 apt-get install -y ffmpeg)
       - run: python3 -m venv /tmp/gateway-tests
       - run: /tmp/gateway-tests/bin/python -m pip install 'cryptography>=45,<51' 'aiohttp>=3.12,<4'
       - run: npm ci --prefix tools/openclaw --omit=peer --ignore-scripts --no-audit --no-fund
