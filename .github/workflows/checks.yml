@@ -1,0 +1,34 @@
+name: Gateway checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: ${{ matrix.node }}
+      - run: python3 -m venv /tmp/gateway-tests
+      - run: /tmp/gateway-tests/bin/python -m pip install 'cryptography>=45,<51' 'aiohttp>=3.12,<4'
+      - run: npm ci --prefix tools/openclaw --omit=peer --ignore-scripts --no-audit --no-fund
+      - run: |
+          node tests/test_passport_plugin.mjs
+          node tests/test_passport_relay.mjs
+          node tests/test_passport_ima.mjs
+          /tmp/gateway-tests/bin/python -m unittest discover -s tests -p 'test_passport_hermes*.py'
+          python3 -m unittest discover -s tests -p test_release.py
+      - run: python3 tools/release.py package build/release
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gateway-node-${{ matrix.node }}
+          path: build/release/*
+          if-no-files-found: error

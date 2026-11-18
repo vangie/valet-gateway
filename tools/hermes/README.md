@@ -27,7 +27,7 @@ This is included in v0.7.0. v0.6.0 does not include it.
 - Python dependencies are declared with upper bounds in `plugin.yaml`. Let the
   Hermes package manager admit them; do not edit its managed Python environment.
 
-Use v0.7.0's `ai-passport-hermes-0.7.0.tar.gz` and verify it against
+Use Valet Gateway v0.1.0's `ai-passport-hermes-0.7.5.tar.gz` and verify it against
 `SHA256SUMS.txt` and `release-manifest.json`; older v0.6.0 does not contain Hermes.
 The archive contains one `ai-passport-hermes/` directory, code/docs/license only.
 

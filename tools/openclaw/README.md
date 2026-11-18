@@ -4,37 +4,28 @@
 
 ## Project component and distribution
 
-This directory is the maintained OpenClaw plugin source for the
-`ai-passport-agent` open-source project, released under the same
-[MIT license](LICENSE) as the firmware and configuration apps. It is maintained
-in this repository, not in a private host checkout or a fork of OpenClaw. Runtime
-installation remains separate because the plugin runs on the gateway computer,
-while firmware runs on the Passport. No personal gateway address, agent name,
-account, network or credential is built into the plugin.
+This is the maintained OpenClaw adapter in [Valet Gateway](https://github.com/vangie/valet-gateway),
+shared by AI Passport and Metalio E-Ink4 Plus under the [MIT license](LICENSE).
+Firmware and gateway releases are independent. Plugin identity, wire protocol and
+existing device credentials remain compatible; source extraction requires no re-pairing.
 
-From the repository root, with Node.js 22 or later, npm, Python 3 and Make:
+Valet Gateway v0.1.0 packages adapter 0.7.5 as `ai-passport-openclaw-0.7.5.tgz`.
+Verify the downloaded release's `SHA256SUMS.txt` and `release-manifest.json`.
+From source, check out the reviewed commit or immutable tag rather than following main.
+Install a persistent copy outside the gateway package; do not install another gateway.
 
 ```sh
-make plugin-test
-make plugin-package
+cd /path/to/valet-gateway/tools/openclaw
+npm ci --omit=peer --ignore-scripts
+openclaw plugins install --link --accept-capabilities "$PWD"
+node doctor.mjs
 ```
 
-Tests and packaging do not need ESP-IDF, hardware, a running OpenClaw instance,
-model credentials or a connected microphone. The versioned archive is written
-to `build/openclaw/ai-passport-openclaw-<version>.tgz`. Its explicit file allowlist
-includes runtime source, migration/doctor tools, bilingual instructions and the
-license, but not dependencies, caches, host links, gateway configuration or keys.
-The package regression verifies the actual tarball contents and JavaScript syntax.
-The checked-in lockfile pins the transport dependency for source installations;
-it does not install a second OpenClaw gateway.
-
-The dedicated [plugin workflow](../../.github/workflows/openclaw-plugin.yml)
-installs locked dependencies and tests/packages on Node 22, 24 and 26, then keeps
-the archive as a CI artifact. It does not publish to npm, create a release,
-contact a gateway or deploy firmware. The full repository gate includes the
-same package regression. Firmware and plugin versions can advance separately;
-coordinate changes to their shared wire protocol and validate the supported
-OpenClaw version before release. Packaging tests are not a live gateway SDK test.
+Keep the existing gateway configuration, plugin ID `ai-passport-openclaw`, device
+pairings and permissions. Only reload/restart through the normal host lifecycle
+when an actual plugin replacement requires it, after checking active work.
+The doctor is a compatibility probe, not a paid provider connection or device test.
+The firmware-specific behavior below describes compatible Passport clients.
 
 ## Upgradeable native integration
 
@@ -255,9 +246,9 @@ tool distinctions. Other clients retain their provider/route. Global
 Install a durable copy outside the gateway package:
 
 ```sh
-cd /path/to/ai-passport-agent/tools/openclaw
+cd /path/to/valet-gateway/tools/openclaw
 npm ci --omit=peer --ignore-scripts
-openclaw plugins install --link --accept-capabilities /path/to/ai-passport-agent/tools/openclaw
+openclaw plugins install --link --accept-capabilities /path/to/valet-gateway/tools/openclaw
 node doctor.mjs
 openclaw gateway call passport.status --json --params '{"agentId":"passport"}'
 ```
@@ -510,9 +501,8 @@ handler/module, and version-specific integration must be checked again.
 ## Verification
 
 ```sh
-make plugin-test
-make plugin-package
-./tools/validate.sh
+make test
+make package
 ```
 
 Run these from the repository root. The JavaScript regression simulates a

@@ -22,17 +22,15 @@ one cipher, `aes-256-cfb`; the server must be configured with the same one.
 Use direct routing to a reliable regional endpoint when possible. Never disable
 certificate checks, expose an unauthenticated gateway, or publish credentials.
 
-The first connection after power-on performs a full TLS handshake, which takes
-about three to four seconds on this chip. Later connections to the same gateway
-resume that TLS session and skip the key exchange and certificate check. The
-session is kept in RAM only, is offered for up to 12 hours, and a gateway that
-no longer accepts it gets a full handshake instead.
+TLS version, connection retention and session tickets are firmware features,
+not guaranteed gateway latency. Compatible clients may offer a cached ticket,
+but the server can decline it and complete a full handshake. Use the device
+firmware logs for actual timings and distinguish a ticket offer from accepted resumption.
 
 The apps' **Copy Prompt** can ask an agent on the gateway host to install a
 missing plugin and establish a missing public ingress using authorized resources.
 It reuses working entries and keeps authentication enabled. Missing account
-access, domains, certificates or quota still require user action; see
-[agent-assisted setup](configuration.md#let-openclaw-prepare-the-gateway).
+access, domains, certificates or quota still require user action; see the firmware project's configuration guide.
 The following sections also support manual setup.
 
 ## Cloudflare Tunnel

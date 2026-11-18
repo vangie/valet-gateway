@@ -4,31 +4,25 @@
 
 ## 项目组成与分发
 
-本目录是 `ai-passport-agent` 开源项目正式维护的 OpenClaw 插件源码，
-与固件和配置端沿用同一份 [MIT 许可证](LICENSE)。源码在本仓库维护，
-不是私人主机里的脚本，也不依赖 OpenClaw fork。插件运行在网关电脑上，
-固件运行在 Passport 上，所以安装位置不同，但属于同一个开源项目。
-插件不内置私人网关地址、助手名称、账户、网络或凭据。
+本目录是 [Valet Gateway](https://github.com/vangie/valet-gateway) 统一维护的 OpenClaw
+适配器，供 AI Passport 和 Metalio E-Ink4 Plus 共用，保留 [MIT 许可证](LICENSE)。
+固件与网关独立发布；插件身份、通信协议和已有设备凭据兼容，源码迁移无需重新配对。
 
-在仓库根目录，准备 Node.js 22 或更高版本、npm、Python 3 和 Make：
+Valet Gateway v0.1.0 提供适配器 0.7.5 包 `ai-passport-openclaw-0.7.5.tgz`。
+核对真实发布包的 `SHA256SUMS.txt` 和 `release-manifest.json`。
+源码安装使用审查过的提交或不可变标签，不跟随 main 自动升级。持久安装在网关软件包以外，
+不另装第二套网关。
 
 ```sh
-make plugin-test
-make plugin-package
+cd /path/to/valet-gateway/tools/openclaw
+npm ci --omit=peer --ignore-scripts
+openclaw plugins install --link --accept-capabilities "$PWD"
+node doctor.mjs
 ```
 
-测试和打包不需要 ESP-IDF、硬件、正在运行的 OpenClaw、模型凭据或麦克风。
-版本化源码包输出到 `build/openclaw/ai-passport-openclaw-<version>.tgz`。
-打包使用明确的文件白名单，仅包含运行源码、迁移／检查工具、双语说明和
-许可证，不包含依赖目录、缓存、本机链接、网关配置或密钥。打包回归检查
-真实压缩包的内容与 JavaScript 语法。仓库中的锁文件固定源码安装所需的
-传输依赖，不会另装第二套 OpenClaw 网关。
-
-独立的[插件 CI](../../.github/workflows/openclaw-plugin.yml) 在 Node 22、24、26
-安装锁定依赖、测试和打包，并把安装包保存为 CI 构件；不会发布 npm、创建
-Release、连接网关或刷入固件。仓库完整门禁也包含同样的打包回归。
-固件和插件可以独立升级；修改共享通信协议时需要配套更新，并在发布前验证
-所支持的 OpenClaw 版本。打包测试不能代替真实网关 SDK 兼容验证。
+保留原网关配置、插件 ID `ai-passport-openclaw`、配对和权限。只有真正替换插件需要时，
+检查正在进行的任务，再通过宿主正常生命周期加载／重启。doctor 是兼容检查，不能代替
+真实模型连接或设备测试。下列固件行为说明适用于兼容 Passport 客户端。
 
 ## 可升级的原生接入
 
@@ -195,9 +189,9 @@ C3 使用独立、有界的收音／播放环形缓冲和少量扬声器参考�
 安装到网关软件包以外的固定位置：
 
 ```sh
-cd /path/to/ai-passport-agent/tools/openclaw
+cd /path/to/valet-gateway/tools/openclaw
 npm ci --omit=peer --ignore-scripts
-openclaw plugins install --link --accept-capabilities /path/to/ai-passport-agent/tools/openclaw
+openclaw plugins install --link --accept-capabilities /path/to/valet-gateway/tools/openclaw
 node doctor.mjs
 openclaw gateway call passport.status --json --params '{"agentId":"passport"}'
 ```
@@ -395,9 +389,8 @@ python3 install-passport-relay.py /path/to/openclaw/dist --restore
 ## 验证
 
 ```sh
-make plugin-test
-make plugin-package
-./tools/validate.sh
+make test
+make package
 ```
 
 从仓库根目录运行。JavaScript 回归模拟 20 秒回复突发、并发控制流、完成

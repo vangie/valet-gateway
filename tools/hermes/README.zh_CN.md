@@ -24,7 +24,7 @@ Agent、工具、记忆、会话存储和授权策略。每台设备都有独立
 - `plugin.yaml` 已声明带版本上限的 Python 依赖。由 Hermes 包管理器管理依赖，
   不要直接修改其受管理的 Python 环境。
 
-使用 v0.7.0 中的 `ai-passport-hermes-0.7.0.tar.gz`，先核对 `SHA256SUMS.txt`
+使用 Valet Gateway v0.1.0 中的 `ai-passport-hermes-0.7.5.tar.gz`，先核对 `SHA256SUMS.txt`
 与 `release-manifest.json`；旧版 v0.6.0 不包含 Hermes。
 压缩包只有 `ai-passport-hermes/` 一层目录，内容仅代码、文档和许可。
 
