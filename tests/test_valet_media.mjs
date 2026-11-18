@@ -13,7 +13,7 @@ const ref=bookLaunches.issue(context);
 const config=valet.resolveConfig({cfg:{},rawConfig:{model:ref}});
 assert.equal(resolveRequest.rawConfig.model,undefined);
 valet.createBridge({cfg:{},providerConfig:{...config,model:ref},instructions:'existing persona',runAgentConsult:r=>r});
-assert.equal(bridgeRequest.providerConfig.model,undefined);assert.match(bridgeRequest.instructions,/宴桃园/);assert.match(bridgeRequest.instructions,/existing persona/);
+assert.equal(bridgeRequest.providerConfig.model,'native-default');assert.match(bridgeRequest.instructions,/宴桃园/);assert.match(bridgeRequest.instructions,/existing persona/);
 assert.match(bridgeRequest.runAgentConsult({question:'谁',context:'old'}).context,/宴桃园/);bookLaunches.remove(ref);
 const pcm=Buffer.alloc(4000);const frames=[];for await(const frame of speechFrames(pcm))frames.push(frame);
 assert.equal(frames.length,2);assert.equal(decodeIma(Buffer.from(frames[0].audioBase64.slice(13),'base64')).length,3840);
@@ -56,3 +56,9 @@ assert.equal(raw.length,960);assert.equal(JSON.parse(speechRequest.options.body)
 assert.equal(speechRequest.options.headers.Authorization,'Bearer private-fixture');
 await assert.rejects(openaiSpeech('答案',{apiKeyEnv:'VALET_TEST_SPEECH_KEY',url:'http://bad'}));
 delete process.env.VALET_TEST_SPEECH_KEY;
+
+const preserved=bookLaunches.issue(context);
+const defaults=valet.resolveConfig({cfg:{talk:{realtime:{providers:{openai:{model:'my-configured-model'}}}}},rawConfig:{model:preserved}});
+assert.equal(defaults.model,'my-configured-model');
+valet.createBridge({cfg:{},providerConfig:{...defaults,model:preserved},instructions:'persona'});
+assert.equal(bridgeRequest.providerConfig.model,'my-configured-model');bookLaunches.remove(preserved);

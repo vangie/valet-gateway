@@ -59,9 +59,9 @@ export function createPassportProvider(getProvider, upstreamId = 'openai', diagn
             const native = context.cfg?.talk?.realtime?.providers?.[upstreamId] ?? {};
             const rawConfig = {...native, ...context.rawConfig};
             const launch = typeof rawConfig.model === 'string' && rawConfig.model.startsWith('valet-book:') ? bookLaunches.get(rawConfig.model) : null;
-            if (launch) { if (launch.model) rawConfig.model = launch.model; else delete rawConfig.model; }
+            if (launch) { const model = launch.model ?? native.model; if (model) rawConfig.model = model; else delete rawConfig.model; }
             const resolved = provider.resolveConfig?.({...context, rawConfig, autoRespondToAudio: true}) ?? rawConfig;
-            return launch ? {...resolved, valetReadingContext: launch.context} : resolved;
+            return launch ? {...resolved, valetReadingContext: launch.context, valetResolvedModel:resolved.model} : resolved;
         },
         isConfigured(context) { return upstream(context.cfg).isConfigured(context); },
         createBridge(request) {
@@ -71,8 +71,9 @@ export function createPassportProvider(getProvider, upstreamId = 'openai', diagn
             if (typeof reference === 'string' && reference.startsWith('valet-book:')) {
                 const launch = bookLaunches.get(reference);
                 const config = {...request.providerConfig, valetReadingContext:launch.context};
-                if (launch.model) config.model = launch.model; else delete config.model;
-                request = {...request, providerConfig:config, ...(request.model === reference ? {model:launch.model} : {})};
+                const model = launch.model ?? config.valetResolvedModel;
+                if (model) config.model = model; else delete config.model;
+                request = {...request, providerConfig:config, ...(request.model === reference ? {model} : {})};
             }
             const provider = upstream(request.cfg);
             let ending = false, ended = false, closeCompletion, closeReason = 'completed';
