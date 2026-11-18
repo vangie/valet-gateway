@@ -37,14 +37,14 @@ export default {
                 const providerConfig = provider.resolveConfig({cfg: config, rawConfig: {}, agentId, surface: 'gateway-relay'});
                 upstreamConfigured = provider.isConfigured({cfg: config, providerConfig, agentId});
             } catch {}
-            respond(true, {pluginVersion: '0.7.5', protocol: PASSPORT_PROTOCOL, path: PASSPORT_PATH,
+            respond(true, {pluginVersion: '0.8.0', protocol: PASSPORT_PROTOCOL, path: PASSPORT_PATH,
                 upstreamProvider: upstreamId, upstreamAvailable: Boolean(upstream), upstreamConfigured,
                 providerRegistered: Boolean(getRealtimeVoiceProvider('passport-realtime', config)),
                 ...(transport?.diagnostics() ?? {connections: 0})});
         }, {scope: 'operator.read'});
         api.registerService({id: 'ai-passport-transport',
             start(context) {
-                transport = createPassportTransport({WebSocket, WebSocketServer, config: context.config, maxConnections});
+                transport = createPassportTransport({WebSocket, WebSocketServer, config: context.config, maxConnections, speech:api.pluginConfig?.speech});
                 context.logger.info('AI Passport native-auth transport ready (protocol 1)');
             },
             stop() { transport?.stop(); transport = undefined; }

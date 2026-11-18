@@ -167,3 +167,22 @@ Web Studio 后端选择及独立 Hermes 分发包已纳入 v0.7.0；维护者确
 连接仍保持。听者反馈初始音量小，提升 6 dB 后偏沙哑，因此部署已降至 3 dB，降低后的
 主观音质仍需听者验收。这些结果不代表一般场景的识别准确率、声学回声或语音打断质量
 已获得充分验证。
+
+
+## Valet v0.2.0 / adapter 0.8.0
+
+Book context and book-aware Live are optional, negotiated per connection; old Passport clients keep the original behaviour and credentials. Ask speech is also opt-in and only speaks the completed, owned answer. Text remains if speech is unavailable.
+
+To reuse existing OpenAI speech credentials without changing Hermes global TTS, add under this platform's `extra`:
+
+```yaml
+speech:
+  provider: openai
+  api_key_env: OPENAI_API_KEY
+  # Alternatively api_key_file: /absolute/private/key-file (0600, not a symlink).
+  # Without a speech-specific file, the existing realtime.api_key_file is reused.
+  model: gpt-4o-mini-tts
+  voice: coral
+```
+
+Leave `provider: host` (or omit `speech`) to use the current Hermes TTS. Host audio conversion requires `ffmpeg` on the service PATH. OpenAI speech uses PCM directly and needs no ffmpeg. No credential is copied into firmware. Install during an appropriate maintenance window; this package never restarts your running gateway. Verify release checksums, preserve the old plugin and config for rollback.

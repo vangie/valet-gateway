@@ -13,6 +13,7 @@ from hermes_cli.config import get_env_value, get_hermes_home
 
 from .passport_auth import DeviceStore, ProtocolError
 from .valet_context import validate_context
+from .valet_speech import synthesize, stream_speech, speech_config, openai_speech
 from .passport_protocol import MAX_AUDIO_BYTES, MAX_FRAME_BYTES, PassportProtocol, wire_json
 from .passport_speech import speech_language, transcription_hints
 from .passport_talk import TalkSession, talk_config
@@ -98,6 +99,9 @@ class PassportAdapter(BasePlatformAdapter):
         call = None
         reading = None
         book_feature = False
+        speech_feature = False
+        speech_task = None
+        speech_tasks = set()
 
         async def send(frame):
             nonlocal sequence
@@ -138,27 +142,59 @@ class PassportAdapter(BasePlatformAdapter):
                         identity, token = self.store.authenticate(params, challenge["nonce"], challenge["ts"])
                         capabilities = params.get("caps", [])
                         book_feature = isinstance(capabilities, list) and "valet-book-context-v1" in capabilities
+                        speech_feature = isinstance(capabilities, list) and "valet-ask-speech-v1" in capabilities
                         scopes = params["scopes"]
                         self.protocol.subscribers.setdefault(identity, set()).add(send)
                         result = {"type": "hello-ok", "protocol": 3, "passportProtocol": 1, "passportAsk": True, "backend": "hermes",
                                   "policy": {"maxPayload": MAX_FRAME_BYTES, "attachments": {"maxBytes": MAX_AUDIO_BYTES}},
                                   "auth": {"role": "operator", "scopes": params["scopes"], "deviceToken": token}}
-                        if book_feature: result.update(valetBookContext=1, valetBookLive=False)
+                        if book_feature: result.update(valetBookContext=1, valetBookLive=True)
+                        if speech_feature: result["valetAskSpeech"] = 1
                     elif not self.store.authorized(identity, token):
                         if call:
                             await call.close("revoked")
                         raise ProtocolError("Device credential revoked", "AUTH_FAILED")
                     elif not book_feature and "-book-" in str(params.get("sessionKey", params.get("key", ""))):
                         raise ProtocolError("Book context was not negotiated", "NOT_SUPPORTED")
+                    elif method == "valet.speech.cancel":
+                        if not speech_feature: raise ProtocolError("Speech was not negotiated")
+                        if speech_task: speech_task.cancel()
+                        result = {}
+                    elif method == "valet.speech.start":
+                        if not speech_feature or "operator.talk" not in scopes or (call and not call.closed) or (speech_task and not speech_task.done()):
+                            raise ProtocolError("Speech is unavailable or busy", "BUSY")
+                        key = reading[0] if reading else f"agent:passport:passport-{identity}"
+                        if params.get("sessionKey") != key: raise ProtocolError("Speech session mismatch", "FORBIDDEN")
+                        run = self.store.db.execute("SELECT * FROM runs WHERE device=? AND session=? AND run=? AND state='final'", (identity,key,params.get("runId"))).fetchone()
+                        if not run: raise ProtocolError("Completed reply not found", "NOT_FOUND")
+                        record = dict(zip([column[1] for column in self.store.db.execute("PRAGMA table_info(runs)")], run))
+                        async def speak(record=record, key=key):
+                            async def speech_send(payload):
+                                await send({"type":"event", "event":"valet.speech", "payload":{"sessionKey":key, **payload}})
+                            try:
+                                source = self.build_source(chat_id=identity, user_id=identity, role_authorized=True)
+                                with self._media_delivery_scope(source): config = speech_config(self.extra, get_env_value)
+                                pcm = await openai_speech(record["text"], config) if config else await synthesize(record["text"], lambda: self._media_delivery_scope(source))
+                                await stream_speech(pcm, speech_send, record["run"], lambda: self.store is not None and self.store.authorized(identity,token), lambda: websocket.closed)
+                            except asyncio.CancelledError: raise
+                            except Exception:
+                                await speech_send({"type":"error", "runId":record["run"], "message":"Configure a working Hermes TTS provider and ffmpeg"})
+                        if len(speech_tasks) >= 2: raise ProtocolError("Previous speech is still stopping", "BUSY")
+                        speech_task = asyncio.create_task(speak())
+                        speech_tasks.add(speech_task)
+                        speech_task.add_done_callback(speech_tasks.discard)
+                        result = {"runId": record["run"]}
                     elif method == "valet.context.set":
                         if not book_feature: raise ProtocolError("Book context was not negotiated")
                         if call and not call.closed: raise ProtocolError("End the call first", "BUSY")
+                        if speech_task: speech_task.cancel()
                         reading = validate_context(identity, params)
                         result = {"sessionKey": reading[0]}
                     elif book_feature and (params.get("sessionKey", params.get("key")) is not None and
                             params.get("sessionKey", params.get("key")) != (reading[0] if reading else f"agent:passport:passport-{identity}")):
                         raise ProtocolError("Conversation context does not match selected session", "FORBIDDEN")
                     elif method == "chat.send":
+                        if speech_task: speech_task.cancel()
                         if identity in self.calls and not self.calls[identity].closed:
                             raise ProtocolError("End the call before asking a separate question", "BUSY")
                         request_key = params.get("idempotencyKey")
@@ -173,6 +209,7 @@ class PassportAdapter(BasePlatformAdapter):
                             task.add_done_callback(self.pending.discard)
                         continue
                     elif method == "chat.abort":
+                        if speech_task: speech_task.cancel()
                         await self.abort(identity, params)
                         result = {}
                     elif method == "passport.status":
@@ -180,7 +217,7 @@ class PassportAdapter(BasePlatformAdapter):
                         result = {"protocol": 1, "backend": "hermes", "ask": True,
                                   "upstreamAvailable": available, "upstreamConfigured": available, "providerRegistered": True}
                     elif method == "talk.session.create":
-                        if reading and reading[1]: raise ProtocolError("Book Live is not supported yet", "NOT_SUPPORTED")
+                        if speech_task: speech_task.cancel()
                         if "operator.talk" not in scopes:
                             raise ProtocolError("Signed talk scope required", "FORBIDDEN")
                         key = params.get("sessionKey")
@@ -196,11 +233,13 @@ class PassportAdapter(BasePlatformAdapter):
                         config = self.realtime_config(identity)
                         if config is None:
                             raise ProtocolError("Realtime voice is not configured", "UNAVAILABLE")
-                        config = {**config, "synthetic": synthetic}
+                        config = {**config, "synthetic": synthetic, **({"reading_context": reading[1]} if reading and reading[1] else {})}
+                        call_key = key
+                        call_context = reading[1] if reading else None
                         persona_path = self.home / "SOUL.md"
                         persona = bounded_persona(persona_path)
                         async def consult(question, context):
-                            return await self.consult(identity, question, context)
+                            return await self.consult(identity, question, context, session_key=call_key, reading_context=call_context)
                         call = TalkSession(identity, config, params["language"], persona, send, consult,
                                            lambda: self.store is not None and self.store.authorized(identity, token))
                         self.calls[identity] = call
@@ -234,6 +273,8 @@ class PassportAdapter(BasePlatformAdapter):
         except (ConnectionError, TimeoutError):
             pass
         finally:
+            for speech in tuple(speech_tasks): speech.cancel()
+            await asyncio.gather(*tuple(speech_tasks), return_exceptions=True)
             if call:
                 await call.close("disconnected")
                 if self.calls.get(identity) is call:
@@ -253,10 +294,10 @@ class PassportAdapter(BasePlatformAdapter):
         with self._media_delivery_scope(source):
             return talk_config(self.extra, get_env_value)
 
-    async def consult(self, identity, question, context):
+    async def consult(self, identity, question, context, *, session_key=None, reading_context=None):
         request = "voice-" + secrets.token_hex(12)
         text = question + ("\n\nRelevant voice conversation context:\n" + context if context else "")
-        run, content, _ = self.protocol.prepare(identity, {"sessionKey": f"agent:passport:passport-{identity}",
+        run, content, _ = self.protocol.prepare(identity, {"sessionKey": session_key or f"agent:passport:passport-{identity}", "_valet_context":reading_context,
                                                           "idempotencyKey": request, "message": text})
         future = asyncio.get_running_loop().create_future()
         self.completions[request] = future

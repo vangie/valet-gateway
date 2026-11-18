@@ -215,3 +215,22 @@ interruption. The listener reported quiet output initially and harsh playback
 after a 6 dB boost; the deployment was reduced to 3 dB. Subjective quality at the
 lower gain still requires listener acceptance. These checks do not establish
 recognition accuracy or acoustic echo/voice interruption quality in general.
+
+
+## Valet v0.2.0 / adapter 0.8.0
+
+Book context and book-aware Live are optional, negotiated per connection; old Passport clients keep the original behaviour and credentials. Ask speech is also opt-in and only speaks the completed, owned answer. Text remains if speech is unavailable.
+
+To reuse existing OpenAI speech credentials without changing Hermes global TTS, add under this platform's `extra`:
+
+```yaml
+speech:
+  provider: openai
+  api_key_env: OPENAI_API_KEY
+  # Alternatively api_key_file: /absolute/private/key-file (0600, not a symlink).
+  # Without a speech-specific file, the existing realtime.api_key_file is reused.
+  model: gpt-4o-mini-tts
+  voice: coral
+```
+
+Leave `provider: host` (or omit `speech`) to use the current Hermes TTS. Host audio conversion requires `ffmpeg` on the service PATH. OpenAI speech uses PCM directly and needs no ffmpeg. No credential is copied into firmware. Install during an appropriate maintenance window; this package never restarts your running gateway. Verify release checksums, preserve the old plugin and config for rollback.

@@ -439,7 +439,7 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
                     async with client.ws_connect("http://127.0.0.1:18791") as ws:
                         challenge = (await ws.receive_json())["payload"]
                         params = signed(private, challenge, bootstrap, True, True, "esp32s31", "e-ink4-plus")
-                        params["caps"] = ["valet-book-context-v1", "passport-ima-v1"]
+                        params["caps"] = ["valet-book-context-v1", "passport-ima-v1", "valet-ask-speech-v1"]
                         identity = params["device"]["id"]
                         base = f"agent:passport:passport-{identity}"
                         async def request(id, method, params):
@@ -449,6 +449,8 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
                                 if result.get("id") == id: return result
                         hello = await request("auth", "connect", params)
                         self.assertEqual(hello["payload"]["valetBookContext"], 1)
+                        self.assertTrue(hello["payload"]["valetBookLive"])
+                        self.assertEqual(hello["payload"]["valetAskSpeech"],1)
                         context = dict(bookId="b"*32, title="三国演义", chapter="第一回", page=2, text="宴桃园", truncated=False)
                         book = base + "-book-" + context["bookId"]
                         self.assertTrue((await request("context", "valet.context.set", dict(sessionKey=book, context=context)))["ok"])
@@ -476,6 +478,35 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(history["payload"]["messages"][0]["content"][0]["text"], "solo answer")
                         wrong = await request("wrong", "passport.transcript",dict(sessionKey=base,requestId="book",runId=asked["payload"]["runId"]))
                         self.assertFalse(wrong["ok"])
+                        with patch("passport_hermes.adapter.synthesize", return_value=bytes(960)):
+                            spoken = await request("speak", "valet.speech.start",dict(sessionKey=base,runId=history["payload"]["messages"][0]["__openclaw"]["runId"]))
+                            self.assertTrue(spoken["ok"])
+                            speech_events=[]
+                            while True:
+                                response=await asyncio.wait_for(ws.receive_json(),5)
+                                if response.get("event")=="valet.speech":
+                                    speech_events.append(response["payload"]["type"])
+                                    self.assertEqual(response["payload"]["sessionKey"],base)
+                                    if response["payload"]["type"]=="done": break
+                            self.assertEqual(speech_events,["start","audio","done"])
+                        denied=await request("other-speech","valet.speech.start",dict(sessionKey=base,runId=asked["payload"]["runId"]))
+                        self.assertFalse(denied["ok"])
+                        # A book Live session receives the same quote and routes tools to its own thread.
+                        await request("book-again","valet.context.set",dict(sessionKey=book,context=context))
+                        captured=[]
+                        async def start_call(call):
+                            captured.append(call.config)
+                            call.ready=True
+                            await call.emit("ready")
+                            await asyncio.Event().wait()
+                        adapter.realtime_config=lambda identity:dict(url="wss://example.test",key="private",model="test",voice="coral")
+                        with patch("passport_hermes.adapter.TalkSession.start",start_call):
+                            created=await request("call","talk.session.create",dict(sessionKey=book,mode="realtime",transport="gateway-relay",brain="agent-consult",language="zh"))
+                            self.assertTrue(created["ok"])
+                            while not captured: await asyncio.sleep(0)
+                            self.assertEqual(captured[0]["reading_context"],context)
+                            await request("close","talk.session.close",dict(sessionId=created["payload"]["sessionId"]))
+
             finally:
                 await adapter.disconnect()
 

@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict';
+import {createBookLaunches, bookLaunches, speechPcm, speechFrames,openaiSpeech} from '../tools/openclaw/valet-media.mjs';
+import {createPassportProvider} from '../tools/openclaw/passport-plugin.mjs';
+import {createPassportConnection} from '../tools/openclaw/passport-proxy.mjs';
+import {decodeIma} from '../tools/openclaw/passport-ima.mjs';
+let now=0;const store=createBookLaunches({now:()=>now});
+const context={bookId:'b'.repeat(32),title:'三国演义',chapter:'第一回',page:2,text:'宴桃园',truncated:false};
+const reference=store.issue(context,'real-model');assert.equal(store.get(reference).model,'real-model');now=30001;assert.throws(()=>store.get(reference));
+let bridgeRequest,resolveRequest;
+const provider={resolveConfig:r=>(resolveRequest=r,{model:r.rawConfig.model??'native-default'}),isConfigured:()=>true,createBridge:r=>(bridgeRequest=r,{connect(){},sendAudio(){},submitToolResult(){},acknowledgeMark(){},handleBargeIn(){},isConnected(){return true},close(){}})};
+const valet=createPassportProvider(()=>provider);
+const ref=bookLaunches.issue(context);
+const config=valet.resolveConfig({cfg:{},rawConfig:{model:ref}});
+assert.equal(resolveRequest.rawConfig.model,undefined);
+valet.createBridge({cfg:{},providerConfig:{...config,model:ref},instructions:'existing persona',runAgentConsult:r=>r});
+assert.equal(bridgeRequest.providerConfig.model,undefined);assert.match(bridgeRequest.instructions,/宴桃园/);assert.match(bridgeRequest.instructions,/existing persona/);
+assert.match(bridgeRequest.runAgentConsult({question:'谁',context:'old'}).context,/宴桃园/);bookLaunches.remove(ref);
+const pcm=Buffer.alloc(4000);const frames=[];for await(const frame of speechFrames(pcm))frames.push(frame);
+assert.equal(frames.length,2);assert.equal(decodeIma(Buffer.from(frames[0].audioBase64.slice(13),'base64')).length,3840);
+assert.equal((await speechPcm(pcm.toString('base64'),'pcm_24000')).length,4000);
+await assert.rejects(speechPcm('invalid!','pcm_24000'));
+await assert.rejects(speechPcm(Buffer.alloc(3).toString('base64'),'pcm_24000'));
+// Real local ffmpeg conversion from a WAV envelope.
+const wav=Buffer.alloc(44+pcm.length);wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(24000,24);wav.writeUInt32LE(48000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(pcm.length,40);
+assert.equal((await speechPcm(wav.toString('base64'),'wav')).length,pcm.length);
+const sent=[],received=[];let stopped='';
+const c=createPassportConnection({sendUpstream:f=>sent.push(f),sendClient:f=>received.push(f),close:r=>stopped=r});
+const identity='a'.repeat(64),key=`agent:passport:passport-${identity}`;
+c.upstream({type:'event',event:'connect.challenge'});
+c.client({type:'req',id:'auth',method:'connect',params:{client:{deviceFamily:'e-ink4-plus'},device:{id:identity,signature:'proof',publicKey:'public'},auth:{deviceToken:'token'},role:'operator',caps:['passport-ima-v1','valet-book-context-v1','valet-ask-speech-v1']}});
+c.upstream({type:'res',id:'auth',ok:true,payload:{policy:{maxPayload:660000},auth:{scopes:['operator.talk']}}});
+assert.equal(received.at(-1).payload.valetAskSpeech,1);assert.equal(received.at(-1).payload.valetBookLive,true);
+c.client({type:'req',id:'book',method:'valet.context.set',params:{sessionKey:key+'-book-'+context.bookId,context}});
+c.client({type:'req',id:'call',method:'talk.session.create',params:{mode:'realtime',transport:'gateway-relay',brain:'agent-consult',sessionKey:key+'-book-'+context.bookId}});
+assert.match(sent.at(-1).params.model,/^valet-book:/);
+// Separate connection for speech so call state cannot bypass exclusive playback checks.
+c.stop('done');
+const s=createPassportConnection({sendUpstream:f=>sent.push(f),sendClient:f=>received.push(f),close:r=>stopped=r});
+s.upstream({type:'event',event:'connect.challenge'});s.client({type:'req',id:'auth',method:'connect',params:{client:{deviceFamily:'e-ink4-plus'},device:{id:identity,signature:'proof',publicKey:'public'},auth:{deviceToken:'token'},role:'operator',caps:['valet-ask-speech-v1']}});s.upstream({type:'res',id:'auth',ok:true,payload:{policy:{maxPayload:660000},auth:{scopes:['operator.talk']}}});
+s.client({type:'req',id:'foreign',method:'valet.speech.start',params:{runId:'foreign',sessionKey:key}});assert.equal(received.at(-1).ok,false);
+s.upstream({type:'event',event:'chat',payload:{sessionKey:key,runId:'run-1',state:'final',message:{content:[{type:'text',text:'这是一段答案'}]}}});
+s.client({type:'req',id:'speak',method:'valet.speech.start',params:{runId:'run-1',sessionKey:key}});const internal=sent.at(-1);assert.equal(internal.method,'talk.speak');assert.equal(internal.params.text,'这是一段答案');
+s.upstream({type:'res',id:internal.id,ok:true,payload:{audioBase64:pcm.toString('base64'),outputFormat:'pcm_24000'}});
+await new Promise(r=>setTimeout(r,20));assert(received.some(f=>f.event==='valet.speech'&&f.payload.type==='audio'));
+s.client({type:'req',id:'cancel',method:'valet.speech.cancel',params:{}});const count=received.filter(f=>f.event==='valet.speech').length;
+await new Promise(r=>setTimeout(r,100));assert.equal(received.filter(f=>f.event==='valet.speech').length,count);s.upstream({type:'res',id:internal.id,ok:true,payload:{audioBase64:pcm.toString('base64'),outputFormat:'pcm_24000'}});
+assert(!received.some(f=>f.id===internal.id));s.stop('done');
+console.log('Valet media: book model resolution/persona/tool context, ffmpeg, IMA, reply ownership, paced speech/cancel PASS');
+
+process.env.VALET_TEST_SPEECH_KEY='private-fixture';
+let speechRequest;
+const raw=await openaiSpeech('答案',{apiKeyEnv:'VALET_TEST_SPEECH_KEY'},{fetchImpl:async(url,options)=>{
+    speechRequest={url,options};return new Response(Buffer.alloc(960));
+}});
+assert.equal(raw.length,960);assert.equal(JSON.parse(speechRequest.options.body).response_format,'pcm');
+assert.equal(speechRequest.options.headers.Authorization,'Bearer private-fixture');
+await assert.rejects(openaiSpeech('答案',{apiKeyEnv:'VALET_TEST_SPEECH_KEY',url:'http://bad'}));
+delete process.env.VALET_TEST_SPEECH_KEY;

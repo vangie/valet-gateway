@@ -40,12 +40,12 @@ class ReleaseTests(unittest.TestCase):
             payload.write_text('tampered')
             with self.assertRaises(ValueError):release.verify(root, 'a' * 40)
 
-    def test_versions_and_plugin_ids_unchanged(self):
+    def test_versions_independent_and_plugin_ids_unchanged(self):
         package = json.loads((ROOT / 'tools/openclaw/package.json').read_text())
         self.assertEqual(package['name'], 'ai-passport-openclaw')
-        self.assertEqual(package['version'], '0.7.5')
-        self.assertIn('version: 0.7.5', (ROOT / 'tools/hermes/plugin.yaml').read_text())
-        self.assertEqual(release.VERSION, '0.1.0')
+        self.assertEqual(package['version'], '0.8.0')
+        self.assertIn('version: 0.8.0', (ROOT / 'tools/hermes/plugin.yaml').read_text())
+        self.assertEqual(release.VERSION, '0.2.0')
 
 
 if __name__ == '__main__':unittest.main()
