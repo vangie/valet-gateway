@@ -46,3 +46,11 @@ After tests and a reviewed commit, run `python3 tools/release.py package build/r
 The package command refuses a dirty checkout and allowlists plugin runtime files.
 Verify downloaded release files with `python3 tools/release.py verify DIRECTORY --commit FULL_COMMIT`.
 Publication and gateway deployment are separate actions.
+
+## v0.2.0 capabilities
+
+Adapters 0.8.0 add opt-in current-page questions, isolated book conversations, book-aware Live and completed-answer speech. Existing Passport clients keep the original v1 handshake, sessions and audio behaviour. See [protocol](protocol/README.md) and [release notes](docs/release/v0.2.0.md).
+
+Ask speech uses a host TTS provider by default. Set plugin-local `speech.provider: openai` to reuse an existing private OpenAI credential without changing your host's global TTS. OpenAI speech returns PCM directly; other host formats require local ffmpeg. Speech is generated only for an authorized, completed answer; cancellation and session switching discard remaining frames. Book content is quoted user context, not an authorization change. Backend chat retention still applies.
+
+Upgrade adapters explicitly using a fixed release; updating a firmware submodule never replaces or restarts a running gateway. v0.1.0 remains available and unchanged for existing Passport releases.

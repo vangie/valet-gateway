@@ -13,6 +13,7 @@ from urllib.parse import urlencode, urlsplit
 from aiohttp import ClientSession, ClientTimeout, WSMsgType
 
 from .passport_auth import ProtocolError
+from .valet_context import book_prompt
 from .passport_ima import decode_audio, encode_ima
 from .passport_protocol import bounded_text, wire_json
 
@@ -91,6 +92,8 @@ def session_settings(config, language, persona):
          if language == "zh" else "Speak natural English unless the user requests another language. ") +
         "\nAgent identity:\n" + persona
     )
+    if config.get("reading_context"):
+        instructions += "\n" + book_prompt(config["reading_context"])
     settings = {"type": "session.update", "session": {"type": "realtime", "model": config["model"],
         "output_modalities": ["audio"], "instructions": instructions,
         "audio": {"input": {"format": {"type": "audio/pcm", "rate": 24000},

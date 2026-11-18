@@ -400,3 +400,16 @@ make package
 升级已安装补丁时，先校验回执并 `--restore`，再按原始处理器哈希安装新版。
 恢复时校验实际安装模块与回执，而不是新版源码。恢复和重新安装之间不重启，
 两步成功后只重启一次；保留上一版补丁源码用于明确回滚。
+
+
+## Valet v0.2.0 / adapter 0.8.0
+
+The optional `valet-book-context-v1` capability enables isolated book questions and Live. `valet-ask-speech-v1` enables speaking completed answers. Old Passport clients retain the original protocol and device authorization; no re-pairing is required by this upgrade.
+
+Ask speech normally uses the host's configured Talk TTS. To reuse OpenAI credentials without changing global speech settings, configure this plugin's `speech`:
+
+```json
+{"provider":"openai","apiKeyEnv":"OPENAI_API_KEY","apiKeyFile":"/absolute/private/existing-key","model":"gpt-4o-mini-tts","voice":"coral"}
+```
+
+Use either an available environment variable or a private 0600 non-symlink file. Do not put the key value in the plugin JSON. OpenAI returns 24 kHz PCM; other host Talk speech formats are converted locally with `ffmpeg`. Missing credentials or conversion tools produce a speech error while retaining the text answer. Installing code does not replace a running plugin until you reload the gateway through its normal lifecycle. Keep the old plugin and config for rollback; do not restart during a conversation.

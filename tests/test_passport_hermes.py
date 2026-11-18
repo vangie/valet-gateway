@@ -413,6 +413,103 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await adapter.disconnect()
 
+    async def test_book_context_negotiation_voice_and_history_isolation(self):
+        from unittest.mock import patch
+        from aiohttp import ClientSession
+        from gateway.config import PlatformConfig
+        from gateway.platform_registry import PlatformEntry, platform_registry
+        from gateway.platforms.event import MessageEvent
+        from passport_hermes.adapter import PassportAdapter, check_requirements
+        import types
+        with tempfile.TemporaryDirectory() as directory:
+            platform_registry.register(PlatformEntry(name="ai_passport", label="AI Passport", adapter_factory=PassportAdapter, check_fn=check_requirements))
+            adapter = PassportAdapter(PlatformConfig(enabled=True, extra={"port": 18791}))
+            adapter.home = Path(directory)
+            seen = []
+            async def handler(event):
+                seen.append(event)
+                return "book answer" if event.source.thread_id else "solo answer"
+            adapter.set_message_handler(handler)
+            await adapter.connect()
+            private = Ed25519PrivateKey.generate()
+            pair = adapter.store.issue("ws://127.0.0.1:18791")
+            bootstrap = json.loads(base64.urlsafe_b64decode(pair["setupCode"] + "=" * (-len(pair["setupCode"]) % 4)))["bootstrapToken"]
+            try:
+                async with ClientSession() as client:
+                    async with client.ws_connect("http://127.0.0.1:18791") as ws:
+                        challenge = (await ws.receive_json())["payload"]
+                        params = signed(private, challenge, bootstrap, True, True, "esp32s31", "e-ink4-plus")
+                        params["caps"] = ["valet-book-context-v1", "passport-ima-v1", "valet-ask-speech-v1"]
+                        identity = params["device"]["id"]
+                        base = f"agent:passport:passport-{identity}"
+                        async def request(id, method, params):
+                            await ws.send_json(dict(type="req", id=id, method=method, params=params))
+                            while True:
+                                result = await asyncio.wait_for(ws.receive_json(), 5)
+                                if result.get("id") == id: return result
+                        hello = await request("auth", "connect", params)
+                        self.assertEqual(hello["payload"]["valetBookContext"], 1)
+                        self.assertTrue(hello["payload"]["valetBookLive"])
+                        self.assertEqual(hello["payload"]["valetAskSpeech"],1)
+                        context = dict(bookId="b"*32, title="三国演义", chapter="第一回", page=2, text="宴桃园", truncated=False)
+                        book = base + "-book-" + context["bookId"]
+                        self.assertTrue((await request("context", "valet.context.set", dict(sessionKey=book, context=context)))["ok"])
+                        with patch("tools.transcription_tools.transcribe_audio", return_value=dict(success=True, transcript="这一页讲什么")):
+                            asked = await request("book", "chat.send", dict(sessionKey=book, message="", idempotencyKey="book", attachments=[dict(type="audio",mimeType="audio/wav",content=base64.b64encode(wav_payload()).decode())]))
+                            self.assertTrue(asked["ok"])
+                            while True:
+                                event = await asyncio.wait_for(ws.receive_json(), 5)
+                                if event.get("payload",{}).get("state") == "final": break
+                        self.assertIn("宴桃园", seen[0].text)
+                        self.assertIn("这一页讲什么", seen[0].text)
+                        self.assertEqual(seen[0].source.thread_id, "b"*32)
+                        self.assertTrue(await adapter.reauthorize_native_roles(seen[0].source))
+                        self.assertTrue((await request("solo", "valet.context.set", dict(sessionKey=base, context=None)))["ok"])
+                        self.assertTrue((await request("question", "chat.send", dict(sessionKey=base,message="你好",idempotencyKey="solo")))["ok"])
+                        while True:
+                            event = await asyncio.wait_for(ws.receive_json(), 5)
+                            if event.get("payload",{}).get("state") == "final": break
+                        self.assertEqual(seen[1].text, "你好")
+                        self.assertIsNone(seen[1].source.thread_id)
+                        from gateway.session import build_session_key
+                        self.assertNotEqual(build_session_key(seen[0].source), build_session_key(seen[1].source))
+                        history = await request("history", "chat.history", dict(sessionKey=base))
+                        self.assertEqual(len(history["payload"]["messages"]), 1)
+                        self.assertEqual(history["payload"]["messages"][0]["content"][0]["text"], "solo answer")
+                        wrong = await request("wrong", "passport.transcript",dict(sessionKey=base,requestId="book",runId=asked["payload"]["runId"]))
+                        self.assertFalse(wrong["ok"])
+                        with patch("passport_hermes.adapter.synthesize", return_value=bytes(960)):
+                            spoken = await request("speak", "valet.speech.start",dict(sessionKey=base,runId=history["payload"]["messages"][0]["__openclaw"]["runId"]))
+                            self.assertTrue(spoken["ok"])
+                            speech_events=[]
+                            while True:
+                                response=await asyncio.wait_for(ws.receive_json(),5)
+                                if response.get("event")=="valet.speech":
+                                    speech_events.append(response["payload"]["type"])
+                                    self.assertEqual(response["payload"]["sessionKey"],base)
+                                    if response["payload"]["type"]=="done": break
+                            self.assertEqual(speech_events,["start","audio","done"])
+                        denied=await request("other-speech","valet.speech.start",dict(sessionKey=base,runId=asked["payload"]["runId"]))
+                        self.assertFalse(denied["ok"])
+                        # A book Live session receives the same quote and routes tools to its own thread.
+                        await request("book-again","valet.context.set",dict(sessionKey=book,context=context))
+                        captured=[]
+                        async def start_call(call):
+                            captured.append(call.config)
+                            call.ready=True
+                            await call.emit("ready")
+                            await asyncio.Event().wait()
+                        adapter.realtime_config=lambda identity:dict(url="wss://example.test",key="private",model="test",voice="coral")
+                        with patch("passport_hermes.adapter.TalkSession.start",start_call):
+                            created=await request("call","talk.session.create",dict(sessionKey=book,mode="realtime",transport="gateway-relay",brain="agent-consult",language="zh"))
+                            self.assertTrue(created["ok"])
+                            while not captured: await asyncio.sleep(0)
+                            self.assertEqual(captured[0]["reading_context"],context)
+                            await request("close","talk.session.close",dict(sessionId=created["payload"]["sessionId"]))
+
+            finally:
+                await adapter.disconnect()
+
 
 if __name__ == "__main__":
     unittest.main()

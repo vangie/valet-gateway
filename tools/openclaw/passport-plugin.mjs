@@ -1,3 +1,5 @@
+import {bookLaunches} from './valet-media.mjs';
+import {bookPrompt} from './valet-context.mjs';
 import {withPassportVoiceInstructions, withPassportVoiceLanguage} from './passport-relay.mjs';
 
 export const PASSPORT_PROVIDER = 'passport-realtime';
@@ -56,10 +58,23 @@ export function createPassportProvider(getProvider, upstreamId = 'openai', diagn
             const provider = upstream(context.cfg);
             const native = context.cfg?.talk?.realtime?.providers?.[upstreamId] ?? {};
             const rawConfig = {...native, ...context.rawConfig};
-            return provider.resolveConfig?.({...context, rawConfig, autoRespondToAudio: true}) ?? rawConfig;
+            const launch = typeof rawConfig.model === 'string' && rawConfig.model.startsWith('valet-book:') ? bookLaunches.get(rawConfig.model) : null;
+            if (launch) { const model = launch.model ?? native.model; if (model) rawConfig.model = model; else delete rawConfig.model; }
+            const resolved = provider.resolveConfig?.({...context, rawConfig, autoRespondToAudio: true}) ?? rawConfig;
+            return launch ? {...resolved, valetReadingContext: launch.context, valetResolvedModel:resolved.model} : resolved;
         },
         isConfigured(context) { return upstream(context.cfg).isConfigured(context); },
         createBridge(request) {
+            // Some hosts reapply launchOptions.model after resolveConfig. Unwrap
+            // the opaque launch here too; it must never reach a model provider.
+            const reference = request.providerConfig?.model;
+            if (typeof reference === 'string' && reference.startsWith('valet-book:')) {
+                const launch = bookLaunches.get(reference);
+                const config = {...request.providerConfig, valetReadingContext:launch.context};
+                const model = launch.model ?? config.valetResolvedModel;
+                if (model) config.model = model; else delete config.model;
+                request = {...request, providerConfig:config, ...(request.model === reference ? {model} : {})};
+            }
             const provider = upstream(request.cfg);
             let ending = false, ended = false, closeCompletion, closeReason = 'completed';
             let bridge;
@@ -102,7 +117,12 @@ export function createPassportProvider(getProvider, upstreamId = 'openai', diagn
                 autoRespondToAudio: true,
                 interruptResponseOnInputAudio: false,
                 providerConfig: {...request.providerConfig, interruptResponseOnInputAudio: false},
-                instructions: withPassportVoiceInstructions(request.instructions, request.language, true, true),
+                instructions: withPassportVoiceInstructions(request.instructions, request.language, true, true) +
+                    (request.providerConfig?.valetReadingContext ? '\n' + bookPrompt(request.providerConfig.valetReadingContext) : ''),
+                ...(request.runAgentConsult && request.providerConfig?.valetReadingContext ? {
+                    runAgentConsult: consult => request.runAgentConsult({...consult,
+                        context: bookPrompt(request.providerConfig.valetReadingContext) + (consult.context ?? '')})
+                } : {}),
                 tools: [...(request.tools ?? []).filter(tool => tool.name !== PASSPORT_END_CALL), endCallTool],
                 onResponseDone(outcome) {
                     replyPending = false;
