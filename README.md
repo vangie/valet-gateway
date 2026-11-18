@@ -46,3 +46,5 @@ After tests and a reviewed commit, run `python3 tools/release.py package build/r
 The package command refuses a dirty checkout and allowlists plugin runtime files.
 Verify downloaded release files with `python3 tools/release.py verify DIRECTORY --commit FULL_COMMIT`.
 Publication and gateway deployment are separate actions.
+
+Development branch `feature/book-context-v1` adds opt-in current-page questions and isolated book sessions. See the protocol contract; deployed v0.1.0 remains unchanged. This extension is not yet a released adapter version.

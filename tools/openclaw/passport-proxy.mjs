@@ -1,4 +1,5 @@
 import {isIP} from 'node:net';
+import {validateContext, bookPrompt} from './valet-context.mjs';
 import {createPassportRelayOutput} from './passport-relay.mjs';
 import {PASSPORT_PATH, PASSPORT_PROTOCOL, PASSPORT_PROVIDER} from './passport-plugin.mjs';
 
@@ -23,6 +24,7 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
     let downstreamSequence = 0, upstreamSequence;
     let cancellingOutput = false;
     const requests = new Map();
+    let deviceIdentity, bookFeature = false, reading = null;
     function emit(frame) {
         if (frame.type === 'event' && frame.event !== 'connect.challenge') frame = {...frame, seq: ++downstreamSequence};
         sendClient(frame);
@@ -59,6 +61,8 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
                     !params.device?.signature || !params.device?.publicKey ||
                     !params.auth?.deviceToken && !params.auth?.bootstrapToken && !params.auth?.token)
                     throw new Error('Passport requires native signed device authentication');
+                deviceIdentity = params.device.id;
+                bookFeature = params.caps?.includes('valet-book-context-v1') === true;
                 connectId = frame.id;
                 ima = params.caps?.includes('passport-ima-v1') === true;
                 phase = 'authenticating';
@@ -66,6 +70,24 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
                 return;
             }
             if (phase !== 'ready') throw new Error('Passport device is not authenticated');
+            if (frame.method === 'valet.context.set') {
+                if (!bookFeature) return reject(frame.id, 'Book context was not negotiated');
+                if (sessionId || createId) return reject(frame.id, 'End the call before switching context');
+                try { reading = validateContext(deviceIdentity, frame.params); }
+                catch (error) { return reject(frame.id, error.message); }
+                emit({type: 'res', id: frame.id, ok: true, payload: {sessionKey: reading.sessionKey}});
+                return;
+            }
+            if (bookFeature) {
+                const key = frame.params?.sessionKey ?? frame.params?.key;
+                if (key !== undefined && key !== (reading?.sessionKey ?? `agent:passport:passport-${deviceIdentity}`))
+                    return reject(frame.id, 'Conversation context does not match selected session');
+                if (reading?.context && frame.method === 'talk.session.create') return reject(frame.id, 'Book Live is not supported yet');
+                if (reading?.context && frame.method === 'chat.send') {
+                    if (typeof frame.params?.message !== 'string' || frame.params.message.length > 4096) return reject(frame.id, 'Invalid question');
+                    frame = {...frame, params: {...frame.params, message: bookPrompt(reading.context) + frame.params.message}};
+                }
+            }
             if (frame.method === 'talk.session.create') {
                 if (createId || sessionId) return reject(frame.id, 'Close the active Passport call before creating another');
                 if (!ima) return reject(frame.id, 'Passport firmware requires passport-ima-v1');
@@ -106,7 +128,7 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
                 const upstreamLimit = frame.payload?.policy?.maxPayload;
                 const maxPayload = Number.isSafeInteger(upstreamLimit) && upstreamLimit > 0 ?
                     Math.min(upstreamLimit, MAX_FRAME_BYTES) : MAX_FRAME_BYTES;
-                frame = {...frame, payload: {...frame.payload, passportProtocol: PASSPORT_PROTOCOL, passportAsk: true,
+                frame = {...frame, payload: {...frame.payload, passportProtocol: PASSPORT_PROTOCOL, passportAsk: true, ...(bookFeature ? {valetBookContext: 1, valetBookLive: false} : {}),
                     policy: {...frame.payload?.policy, maxPayload}}};
             }
             const request = frame.type === 'res' ? requests.get(frame.id) : undefined;

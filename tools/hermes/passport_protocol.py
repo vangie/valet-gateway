@@ -8,6 +8,7 @@ import struct
 import time
 
 from .passport_auth import ProtocolError
+from .valet_context import book_prompt
 
 
 MAX_AUDIO_BYTES = 480058
@@ -76,7 +77,8 @@ class PassportProtocol:
 
     @staticmethod
     def session(identity, key):
-        if key != f"agent:passport:passport-{identity}":
+        prefix = f"agent:passport:passport-{identity}"
+        if key != prefix and (not isinstance(key, str) or not re.fullmatch(re.escape(prefix) + r"-book-[a-f0-9]{32}", key)):
             raise ProtocolError("Device does not own this conversation", "FORBIDDEN")
         return key
 
@@ -91,10 +93,13 @@ class PassportProtocol:
         if not isinstance(request, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,79}", request):
             raise ProtocolError("Invalid request identity")
         question, audio = attachment(params)
-        digest = hashlib.sha256(question.encode() if audio is None else audio).hexdigest()
+        context = params.get("_valet_context")
+        digest_data = question.encode() if audio is None else audio
+        if context is not None: digest_data = session.encode() + b"\0" + wire_json(context).encode() + b"\0" + digest_data
+        digest = hashlib.sha256(digest_data).hexdigest()
         existing = self.get_run(identity, request)
         if existing:
-            if existing["digest"] != digest:
+            if existing["digest"] != digest or existing["session"] != session:
                 raise ProtocolError("Request identity was already used for different audio", "CONFLICT")
             return existing, None, False
         with self.store.db:
@@ -107,11 +112,11 @@ class PassportProtocol:
                 raise ProtocolError("Question history is full; try again later", "BUSY")
             self.store.db.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, 'running', '', '', ?)",
                                   (identity, request, digest, secrets.token_hex(16), session, self.now()))
-        return self.get_run(identity, request), (question, audio), True
+        return self.get_run(identity, request), (book_prompt(context) + question, audio), True
 
     def history(self, identity, params):
-        self.session(identity, params.get("sessionKey"))
-        rows = self.store.db.execute("SELECT request FROM runs WHERE device = ? ORDER BY created DESC LIMIT 8", (identity,)).fetchall()
+        session = self.session(identity, params.get("sessionKey"))
+        rows = self.store.db.execute("SELECT request FROM runs WHERE device = ? AND session = ? ORDER BY created DESC LIMIT 8", (identity, session)).fetchall()
         runs = [self.get_run(identity, row[0]) for row in rows]
         result = {"messages": [], "sessionInfo": {"activeRunIds": [run["run"] for run in runs if run["state"] == "running"]}}
         for run in runs:
@@ -140,7 +145,7 @@ class PassportProtocol:
         if not isinstance(request, str):
             raise ProtocolError("Invalid request identity")
         run = self.get_run(identity, request)
-        if not run or run["run"] != params.get("runId"):
+        if not run or run["run"] != params.get("runId") or run["session"] != params.get("sessionKey"):
             raise ProtocolError("Unknown question", "NOT_FOUND")
         return {"runId": run["run"], "requestId": run["request"], "text": run["transcript"]}
 

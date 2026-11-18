@@ -4,7 +4,9 @@ test:
 	node tests/test_passport_plugin.mjs
 	node tests/test_passport_relay.mjs
 	node tests/test_passport_ima.mjs
+	node tests/test_valet_context.mjs
 	python3 -m unittest discover -s tests -p 'test_passport_hermes*.py'
+	python3 -m unittest discover -s tests -p 'test_valet_context.py'
 	python3 -m unittest discover -s tests -p 'test_release.py'
 
 package:

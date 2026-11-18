@@ -12,6 +12,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from hermes_cli.config import get_env_value, get_hermes_home
 
 from .passport_auth import DeviceStore, ProtocolError
+from .valet_context import validate_context
 from .passport_protocol import MAX_AUDIO_BYTES, MAX_FRAME_BYTES, PassportProtocol, wire_json
 from .passport_speech import speech_language, transcription_hints
 from .passport_talk import TalkSession, talk_config
@@ -95,6 +96,8 @@ class PassportAdapter(BasePlatformAdapter):
         capabilities = []
         scopes = []
         call = None
+        reading = None
+        book_feature = False
 
         async def send(frame):
             nonlocal sequence
@@ -134,15 +137,27 @@ class PassportAdapter(BasePlatformAdapter):
                             raise ProtocolError("Authenticate first", "AUTH_FAILED")
                         identity, token = self.store.authenticate(params, challenge["nonce"], challenge["ts"])
                         capabilities = params.get("caps", [])
+                        book_feature = isinstance(capabilities, list) and "valet-book-context-v1" in capabilities
                         scopes = params["scopes"]
                         self.protocol.subscribers.setdefault(identity, set()).add(send)
                         result = {"type": "hello-ok", "protocol": 3, "passportProtocol": 1, "passportAsk": True, "backend": "hermes",
                                   "policy": {"maxPayload": MAX_FRAME_BYTES, "attachments": {"maxBytes": MAX_AUDIO_BYTES}},
                                   "auth": {"role": "operator", "scopes": params["scopes"], "deviceToken": token}}
+                        if book_feature: result.update(valetBookContext=1, valetBookLive=False)
                     elif not self.store.authorized(identity, token):
                         if call:
                             await call.close("revoked")
                         raise ProtocolError("Device credential revoked", "AUTH_FAILED")
+                    elif not book_feature and "-book-" in str(params.get("sessionKey", params.get("key", ""))):
+                        raise ProtocolError("Book context was not negotiated", "NOT_SUPPORTED")
+                    elif method == "valet.context.set":
+                        if not book_feature: raise ProtocolError("Book context was not negotiated")
+                        if call and not call.closed: raise ProtocolError("End the call first", "BUSY")
+                        reading = validate_context(identity, params)
+                        result = {"sessionKey": reading[0]}
+                    elif book_feature and (params.get("sessionKey", params.get("key")) is not None and
+                            params.get("sessionKey", params.get("key")) != (reading[0] if reading else f"agent:passport:passport-{identity}")):
+                        raise ProtocolError("Conversation context does not match selected session", "FORBIDDEN")
                     elif method == "chat.send":
                         if identity in self.calls and not self.calls[identity].closed:
                             raise ProtocolError("End the call before asking a separate question", "BUSY")
@@ -150,7 +165,7 @@ class PassportAdapter(BasePlatformAdapter):
                         existing = self.protocol.get_run(identity, request_key) if isinstance(request_key, str) else None
                         if not existing and len(self.pending) >= 4:
                             raise ProtocolError("Voice preparation slots are busy", "BUSY")
-                        run, content, fresh = self.protocol.prepare(identity, params)
+                        run, content, fresh = self.protocol.prepare(identity, {**params, "_valet_context": reading[1] if reading else None})
                         await send({"type": "res", "id": request_id, "ok": True, "payload": {"runId": run["run"]}})
                         if fresh:
                             task = asyncio.create_task(self.submit(identity, run, content))
@@ -165,6 +180,7 @@ class PassportAdapter(BasePlatformAdapter):
                         result = {"protocol": 1, "backend": "hermes", "ask": True,
                                   "upstreamAvailable": available, "upstreamConfigured": available, "providerRegistered": True}
                     elif method == "talk.session.create":
+                        if reading and reading[1]: raise ProtocolError("Book Live is not supported yet", "NOT_SUPPORTED")
                         if "operator.talk" not in scopes:
                             raise ProtocolError("Signed talk scope required", "FORBIDDEN")
                         key = params.get("sessionKey")
@@ -259,6 +275,7 @@ class PassportAdapter(BasePlatformAdapter):
         audio_path = None
         source = self.build_source(chat_id=identity, chat_name="AI Passport", user_id=identity,
                                    user_name="Passport owner", role_authorized=True)
+        source.thread_id = run["session"].split("-book-", 1)[1] if "-book-" in run["session"] else None
         grant = self.store.db.execute("SELECT token_hash FROM devices WHERE id = ?", (identity,)).fetchone()
         source.user_id_alt = "passport-grant-v1:" + grant[0] if grant else None
         event = MessageEvent(text=question, message_type=MessageType.TEXT,
@@ -288,8 +305,8 @@ class PassportAdapter(BasePlatformAdapter):
                 transcript = transcription.get("transcript")
                 if not transcription.get("success") or not isinstance(transcript, str) or not transcript.strip():
                     raise ProtocolError("Voice transcription is unavailable")
-                event.text = transcript.strip()
-                await self.protocol.update(identity, run["request"], transcript=event.text)
+                event.text = question + transcript.strip()
+                await self.protocol.update(identity, run["request"], transcript=transcript.strip())
             if self.protocol.get_run(identity, run["request"])["state"] != "running":
                 if audio_path:
                     audio_path.unlink(missing_ok=True)
@@ -308,7 +325,7 @@ class PassportAdapter(BasePlatformAdapter):
 
     async def reauthorize_native_roles(self, source):
         if (self.store is None or source.platform != self.platform or source.chat_type != "dm" or
-                source.user_id != source.chat_id or source.thread_id or not source.user_id_alt):
+                source.user_id != source.chat_id or (source.thread_id is not None and (not isinstance(source.thread_id, str) or len(source.thread_id) != 32 or any(c not in "0123456789abcdef" for c in source.thread_id))) or not source.user_id_alt):
             return False
         grant = self.store.db.execute("SELECT token_hash FROM devices WHERE id = ?", (source.chat_id,)).fetchone()
         return bool(grant and secrets.compare_digest(source.user_id_alt, "passport-grant-v1:" + grant[0]))
@@ -318,7 +335,7 @@ class PassportAdapter(BasePlatformAdapter):
         run_id = params.get("runId")
         if not isinstance(run_id, str):
             raise ProtocolError("Invalid task identity")
-        row = self.store.db.execute("SELECT request, state FROM runs WHERE device = ? AND run = ?", (identity, run_id)).fetchone()
+        row = self.store.db.execute("SELECT request, state FROM runs WHERE device = ? AND run = ? AND session = ?", (identity, run_id, params.get("sessionKey"))).fetchone()
         if not row:
             raise ProtocolError("Unknown task", "NOT_FOUND")
         if row[1] != "running":

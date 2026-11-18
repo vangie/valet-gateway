@@ -24,7 +24,9 @@ jobs:
           node tests/test_passport_plugin.mjs
           node tests/test_passport_relay.mjs
           node tests/test_passport_ima.mjs
+          node tests/test_valet_context.mjs
           /tmp/gateway-tests/bin/python -m unittest discover -s tests -p 'test_passport_hermes*.py'
+          /tmp/gateway-tests/bin/python -m unittest discover -s tests -p 'test_valet_context.py'
           python3 -m unittest discover -s tests -p test_release.py
       - run: python3 tools/release.py package build/release
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
