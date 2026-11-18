@@ -23,14 +23,14 @@ from passport_hermes.passport_protocol import MAX_HISTORY_BYTES, PassportProtoco
 from passport_hermes.passport_speech import speech_language, transcription_hints
 
 
-def signed(private, challenge, credential, bootstrap=False, talk=False):
+def signed(private, challenge, credential, bootstrap=False, talk=False, platform="esp32c3", family="ai-passport"):
     public = private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     identity = hashlib.sha256(public).hexdigest()
     scopes = ["operator.read", "operator.write"] + (["operator.talk"] if talk else [])
     proof = "|".join(["v3", identity, "gateway-client", "ui", "operator", ",".join(scopes),
-                      str(challenge["ts"]), credential, challenge["nonce"], "esp32c3", "ai-passport"])
+                      str(challenge["ts"]), credential, challenge["nonce"], platform, family])
     return {"minProtocol": 3, "maxProtocol": 4, "role": "operator", "scopes": scopes,
-            "client": {"id": "gateway-client", "mode": "ui", "platform": "esp32c3", "deviceFamily": "ai-passport"},
+            "client": {"id": "gateway-client", "mode": "ui", "platform": platform, "deviceFamily": family},
             "auth": {"bootstrapToken" if bootstrap else "deviceToken": credential},
             "device": {"id": identity, "publicKey": encode(public), "signature": encode(private.sign(proof.encode())),
                        "signedAt": challenge["ts"], "nonce": challenge["nonce"]}}
@@ -416,3 +416,21 @@ class HermesAdapterTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValetIdentityTests(unittest.TestCase):
+    def test_new_family_retains_pairing_and_rejects_relabeling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = DeviceStore(Path(directory) / "devices.sqlite")
+            private = Ed25519PrivateKey.generate()
+            pair = store.issue("wss://valet.example")
+            token = json.loads(base64.urlsafe_b64decode(pair["setupCode"] + "=" * (-len(pair["setupCode"]) % 4)))["bootstrapToken"]
+            challenge = {"nonce": "valet-challenge", "ts": 2000000000000}
+            params = signed(private, challenge, token, True, True, "esp32s31", "e-ink4-plus")
+            identity, token = store.authenticate(params, challenge["nonce"], challenge["ts"])
+            params = signed(private, challenge, token, False, True, "esp32s31", "e-ink4-plus")
+            self.assertEqual(store.authenticate(params, challenge["nonce"], challenge["ts"]), (identity, token))
+            params["client"]["platform"] = "esp32c3"
+            with self.assertRaises(ProtocolError):
+                store.authenticate(params, challenge["nonce"], challenge["ts"])
+            store.close()
