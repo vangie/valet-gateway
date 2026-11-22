@@ -186,3 +186,14 @@ speech:
 ```
 
 Leave `provider: host` (or omit `speech`) to use the current Hermes TTS. Host audio conversion requires `ffmpeg` on the service PATH. OpenAI speech uses PCM directly and needs no ffmpeg. No credential is copied into firmware. Install during an appropriate maintenance window; this package never restarts your running gateway. Verify release checksums, preserve the old plugin and config for rollback.
+
+## Valet v0.3.0 / 插件 0.9.0：书内搜索
+
+新版 Valet 固件声明 `valet-book-tools-v1` 后，网关回 `valetBookTools: 1`，并在设备选定的书本会话里给助理两个工具：
+
+- `valet_book_search`：在用户正在读的这本书里搜一个词或短语，返回命中的段落和位置（如 `c15.p32`，章.段），以及读者当前所在位置。`scope: "read"` 只搜已经读过的部分，避免剧透；一次搜不完时按 `nextChapter` 接着搜。
+- `valet_book_read`：按位置（或 `current`）读前后几段，结果里的 `prev` / `next` 用来接着读。
+
+书留在设备上：网关把每次调用转成一个 `valet.book.request` 事件发给设备，设备在后台读书后用 `valet.book.result` 回结果。只有设备当前选定的那本书的会话里有这两个工具，设备离线或换书后工具消失，等待中的调用失败。参数逐项校验，搜索词最长 120 字节；设备回的结果最长 16 KiB；同一设备最多两个请求同时等待，45 秒没回就失败。正文作为参考资料交给模型，并注明不是指令。
+
+通话中翻页（同一本书）现在可以更新当前页，之后的委托用新页；换书仍要先挂断。旧固件不声明这项能力，行为不变。

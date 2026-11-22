@@ -2,6 +2,7 @@ import {randomBytes} from 'node:crypto';
 import {bookLaunches, speechPcm, speechFrames, openaiSpeech} from './valet-media.mjs';
 import {isIP} from 'node:net';
 import {validateContext, bookPrompt} from './valet-context.mjs';
+import {BOOK_TOOLS_CAP, bookRegistry, createBookChannel} from './valet-book-tools.mjs';
 import {createPassportRelayOutput} from './passport-relay.mjs';
 import {PASSPORT_PATH, PASSPORT_PROTOCOL, PASSPORT_PROVIDER} from './passport-plugin.mjs';
 
@@ -21,12 +22,20 @@ export function forwardedAddress(req) {
     return address && isIP(address) && address !== '::1' && !address.startsWith('127.') ? address : '192.0.2.1';
 }
 
-export function createPassportConnection({sendUpstream, sendClient, close, now, schedule, cancel, synthesizeSpeech}) {
+export function createPassportConnection({sendUpstream, sendClient, close, now, schedule, cancel, synthesizeSpeech, books = bookRegistry}) {
     let phase = 'challenge', connectId, createId, sessionId, ima = false, closed = false;
     let downstreamSequence = 0, upstreamSequence;
     let cancellingOutput = false;
     const requests = new Map();
     let deviceIdentity, bookFeature = false, speechFeature = false, talkAllowed = false, reading = null, launchRef;
+    let bookToolsFeature = false, bookChannel = null;
+    // Book tools follow the selected book session: the assistant can search / read only the book this device chose.
+    function selectBookChannel() {
+        const key = reading?.context ? reading.sessionKey : null;
+        if (bookChannel && bookChannel.sessionKey === key) return;
+        if (bookChannel) { books.detach(bookChannel.sessionKey, bookChannel); bookChannel.close(); bookChannel = null; }
+        if (key && bookToolsFeature && phase === 'ready') { bookChannel = createBookChannel({emit, sessionKey: key}); books.attach(key, bookChannel); }
+    }
     let speechJob = null, speechPending = null, speechTimer = null;
     const replies = new Map();
     function cancelSpeech() { clearTimeout(speechTimer); if (speechJob) speechJob.abort(); speechJob = null; speechPending = null; }
@@ -72,7 +81,9 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
     }
     function stop(reason) {
         if (closed) return;
-        closed = true; cancelSpeech(); if (launchRef) bookLaunches.remove(launchRef); output.close(); requests.clear(); close(reason);
+        closed = true; cancelSpeech(); if (launchRef) bookLaunches.remove(launchRef);
+        if (bookChannel) { books.detach(bookChannel.sessionKey, bookChannel); bookChannel.close(); bookChannel = null; }
+        output.close(); requests.clear(); close(reason);
     }
     function reject(id, message) {
         emit({type: 'res', id, ok: false, error: {code: 'INVALID_REQUEST', message}});
@@ -98,6 +109,7 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
                 deviceIdentity = params.device.id;
                 bookFeature = params.caps?.includes('valet-book-context-v1') === true;
                 speechFeature = params.caps?.includes('valet-ask-speech-v1') === true;
+                bookToolsFeature = bookFeature && params.caps?.includes(BOOK_TOOLS_CAP) === true;
                 connectId = frame.id;
                 ima = params.caps?.includes('passport-ima-v1') === true;
                 phase = 'authenticating';
@@ -128,11 +140,19 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
             }
             if (frame.method === 'valet.context.set') {
                 if (!bookFeature) return reject(frame.id, 'Book context was not negotiated');
-                if (sessionId || createId) return reject(frame.id, 'End the call before switching context');
-                cancelSpeech(); replies.clear();
-                try { reading = validateContext(deviceIdentity, frame.params); }
+                let next;
+                try { next = validateContext(deviceIdentity, frame.params); }
                 catch (error) { return reject(frame.id, error.message); }
+                // During a call only the page may change (same book session): consultations then use the new page.
+                if ((sessionId || createId) && next.sessionKey !== reading?.sessionKey) return reject(frame.id, 'End the call before switching context');
+                if (!sessionId && !createId) { cancelSpeech(); replies.clear(); }
+                reading = next; selectBookChannel();
                 emit({type: 'res', id: frame.id, ok: true, payload: {sessionKey: reading.sessionKey}});
+                return;
+            }
+            if (frame.method === 'valet.book.result') {
+                if (!bookChannel || !bookChannel.result(frame.params)) return reject(frame.id, 'No book request is waiting for this result');
+                emit({type: 'res', id: frame.id, ok: true, payload: {}});
                 return;
             }
             if (bookFeature) {
@@ -209,6 +229,7 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
                 const maxPayload = Number.isSafeInteger(upstreamLimit) && upstreamLimit > 0 ?
                     Math.min(upstreamLimit, MAX_FRAME_BYTES) : MAX_FRAME_BYTES;
                 frame = {...frame, payload: {...frame.payload, passportProtocol: PASSPORT_PROTOCOL, passportAsk: true, ...(bookFeature ? {valetBookContext: 1, valetBookLive: true} : {}), ...(speechFeature ? {valetAskSpeech:1} : {}),
+                    ...(bookToolsFeature ? {valetBookTools: 1} : {}),
                     policy: {...frame.payload?.policy, maxPayload}}};
             }
             const request = frame.type === 'res' ? requests.get(frame.id) : undefined;

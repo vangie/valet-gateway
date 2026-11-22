@@ -11,9 +11,9 @@ import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 HERMES = {'__init__.py', 'adapter.py', 'passport_auth.py', 'passport_ima.py',
-          'passport_protocol.py', 'passport_speech.py', 'valet_context.py', 'valet_speech.py', 'passport_talk.py',
+          'passport_protocol.py', 'passport_speech.py', 'valet_context.py', 'valet_speech.py', 'valet_book_tools.py', 'passport_talk.py',
           'plugin.yaml', 'README.md', 'README.zh_CN.md'}
 
 

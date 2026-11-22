@@ -13,6 +13,7 @@ from hermes_cli.config import get_env_value, get_hermes_home
 
 from .passport_auth import DeviceStore, ProtocolError
 from .valet_context import validate_context
+from .valet_book_tools import BOOK_TOOLS_CAP, BookChannel, register_tools, registry as book_registry
 from .valet_speech import synthesize, stream_speech, speech_config, openai_speech
 from .passport_protocol import MAX_AUDIO_BYTES, MAX_FRAME_BYTES, PassportProtocol, wire_json
 from .passport_speech import speech_language, transcription_hints
@@ -102,6 +103,22 @@ class PassportAdapter(BasePlatformAdapter):
         speech_feature = False
         speech_task = None
         speech_tasks = set()
+        book_tools_feature = False
+        book_channel = None
+
+        def select_book_channel():
+            # Book tools follow the selected book session: only the book this device chose, only while online.
+            nonlocal book_channel
+            key = reading[0] if reading and reading[1] else None
+            if book_channel is not None and book_channel.session_key == key:
+                return
+            if book_channel is not None:
+                book_registry.detach(book_channel)
+                book_channel.close()
+                book_channel = None
+            if key and book_tools_feature:
+                book_channel = BookChannel(send, key, asyncio.get_running_loop())
+                book_registry.attach(book_channel)
 
         async def send(frame):
             nonlocal sequence
@@ -143,6 +160,7 @@ class PassportAdapter(BasePlatformAdapter):
                         capabilities = params.get("caps", [])
                         book_feature = isinstance(capabilities, list) and "valet-book-context-v1" in capabilities
                         speech_feature = isinstance(capabilities, list) and "valet-ask-speech-v1" in capabilities
+                        book_tools_feature = book_feature and BOOK_TOOLS_CAP in capabilities
                         scopes = params["scopes"]
                         self.protocol.subscribers.setdefault(identity, set()).add(send)
                         result = {"type": "hello-ok", "protocol": 3, "passportProtocol": 1, "passportAsk": True, "backend": "hermes",
@@ -150,6 +168,7 @@ class PassportAdapter(BasePlatformAdapter):
                                   "auth": {"role": "operator", "scopes": params["scopes"], "deviceToken": token}}
                         if book_feature: result.update(valetBookContext=1, valetBookLive=True)
                         if speech_feature: result["valetAskSpeech"] = 1
+                        if book_tools_feature: result["valetBookTools"] = 1
                     elif not self.store.authorized(identity, token):
                         if call:
                             await call.close("revoked")
@@ -186,10 +205,19 @@ class PassportAdapter(BasePlatformAdapter):
                         result = {"runId": record["run"]}
                     elif method == "valet.context.set":
                         if not book_feature: raise ProtocolError("Book context was not negotiated")
-                        if call and not call.closed: raise ProtocolError("End the call first", "BUSY")
-                        if speech_task: speech_task.cancel()
-                        reading = validate_context(identity, params)
+                        next_reading = validate_context(identity, params)
+                        # During a call only the page may change (same book session): consultations then use the new page.
+                        in_call = call is not None and not call.closed
+                        if in_call and next_reading[0] != (reading[0] if reading else None):
+                            raise ProtocolError("End the call first", "BUSY")
+                        if speech_task and not in_call: speech_task.cancel()
+                        reading = next_reading
+                        select_book_channel()
                         result = {"sessionKey": reading[0]}
+                    elif method == "valet.book.result":
+                        if book_channel is None or not book_channel.result(params):
+                            raise ProtocolError("No book request is waiting for this result", "NOT_FOUND")
+                        result = {}
                     elif book_feature and (params.get("sessionKey", params.get("key")) is not None and
                             params.get("sessionKey", params.get("key")) != (reading[0] if reading else f"agent:passport:passport-{identity}")):
                         raise ProtocolError("Conversation context does not match selected session", "FORBIDDEN")
@@ -239,7 +267,9 @@ class PassportAdapter(BasePlatformAdapter):
                         persona_path = self.home / "SOUL.md"
                         persona = bounded_persona(persona_path)
                         async def consult(question, context):
-                            return await self.consult(identity, question, context, session_key=call_key, reading_context=call_context)
+                            # The page may have turned since the call began (same book): use the current one.
+                            current = reading[1] if reading and reading[0] == call_key and reading[1] else call_context
+                            return await self.consult(identity, question, context, session_key=call_key, reading_context=current)
                         call = TalkSession(identity, config, params["language"], persona, send, consult,
                                            lambda: self.store is not None and self.store.authorized(identity, token))
                         self.calls[identity] = call
@@ -273,6 +303,9 @@ class PassportAdapter(BasePlatformAdapter):
         except (ConnectionError, TimeoutError):
             pass
         finally:
+            if book_channel is not None:
+                book_registry.detach(book_channel)
+                book_channel.close()
             for speech in tuple(speech_tasks): speech.cancel()
             await asyncio.gather(*tuple(speech_tasks), return_exceptions=True)
             if call:
@@ -444,3 +477,4 @@ def register(ctx):
                           check_fn=check_requirements, max_message_length=0,
                           platform_hint="The user asks voice questions on a small wearable display. Reply concisely in the user's language.")
     ctx.register_hook("pre_transcription", transcription_hints)
+    register_tools(ctx)

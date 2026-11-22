@@ -3,6 +3,7 @@ import WebSocket, {WebSocketServer} from 'ws';
 import {createPassportProvider, PASSPORT_PATH, PASSPORT_PROTOCOL} from './passport-plugin.mjs';
 import {createPassportTransport} from './passport-proxy.mjs';
 import {registerPassportTranscripts} from './passport-transcript.mjs';
+import {BOOK_READ, BOOK_SEARCH, bookRegistry, createBookTools} from './valet-book-tools.mjs';
 
 export default {
     id: 'ai-passport-openclaw',
@@ -16,6 +17,9 @@ export default {
         api.registerRealtimeVoiceProvider(createPassportProvider(getRealtimeVoiceProvider, upstreamId,
             event => api.logger.info(`Passport realtime diagnostic ${JSON.stringify(event)}`)));
         registerPassportTranscripts(api);
+        // Search / read the book the user is reading, only in that device's book session while it is online.
+        if (typeof api.registerTool === 'function')
+            api.registerTool(ctx => createBookTools(ctx), {names: [BOOK_SEARCH, BOOK_READ], workspaceAccess: false});
         let transport;
         api.registerHttpRoute({path: PASSPORT_PATH, auth: 'plugin', match: 'exact',
             handler(_req, res) {
@@ -37,9 +41,10 @@ export default {
                 const providerConfig = provider.resolveConfig({cfg: config, rawConfig: {}, agentId, surface: 'gateway-relay'});
                 upstreamConfigured = provider.isConfigured({cfg: config, providerConfig, agentId});
             } catch {}
-            respond(true, {pluginVersion: '0.8.0', protocol: PASSPORT_PROTOCOL, path: PASSPORT_PATH,
+            respond(true, {pluginVersion: '0.9.0', protocol: PASSPORT_PROTOCOL, path: PASSPORT_PATH,
                 upstreamProvider: upstreamId, upstreamAvailable: Boolean(upstream), upstreamConfigured,
                 providerRegistered: Boolean(getRealtimeVoiceProvider('passport-realtime', config)),
+                bookToolSessions: bookRegistry.size(),
                 ...(transport?.diagnostics() ?? {connections: 0})});
         }, {scope: 'operator.read'});
         api.registerService({id: 'ai-passport-transport',
