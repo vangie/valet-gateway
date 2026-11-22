@@ -9,6 +9,9 @@ license: MIT
 homepage: https://github.com/vangie/valet-gateway
 provides_hooks:
   - pre_transcription
+provides_tools:
+  - valet_book_search
+  - valet_book_read
 python_dependencies:
   - aiohttp>=3.12,<4
   - cryptography>=45,<51
