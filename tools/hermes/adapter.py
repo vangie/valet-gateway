@@ -229,7 +229,8 @@ class PassportAdapter(BasePlatformAdapter):
                         existing = self.protocol.get_run(identity, request_key) if isinstance(request_key, str) else None
                         if not existing and len(self.pending) >= 4:
                             raise ProtocolError("Voice preparation slots are busy", "BUSY")
-                        run, content, fresh = self.protocol.prepare(identity, {**params, "_valet_context": reading[1] if reading else None})
+                        run, content, fresh = self.protocol.prepare(identity, {**params, "_valet_context": reading[1] if reading else None,
+                                                                                "_valet_book_tools": book_channel is not None})
                         await send({"type": "res", "id": request_id, "ok": True, "payload": {"runId": run["run"]}})
                         if fresh:
                             task = asyncio.create_task(self.submit(identity, run, content))
@@ -330,7 +331,9 @@ class PassportAdapter(BasePlatformAdapter):
     async def consult(self, identity, question, context, *, session_key=None, reading_context=None):
         request = "voice-" + secrets.token_hex(12)
         text = question + ("\n\nRelevant voice conversation context:\n" + context if context else "")
+        from .valet_book_tools import registry as book_registry
         run, content, _ = self.protocol.prepare(identity, {"sessionKey": session_key or f"agent:passport:passport-{identity}", "_valet_context":reading_context,
+                                                          "_valet_book_tools": bool(session_key and book_registry.get(session_key)),
                                                           "idempotencyKey": request, "message": text})
         future = asyncio.get_running_loop().create_future()
         self.completions[request] = future

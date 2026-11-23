@@ -112,7 +112,7 @@ class PassportProtocol:
                 raise ProtocolError("Question history is full; try again later", "BUSY")
             self.store.db.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, 'running', '', '', ?)",
                                   (identity, request, digest, secrets.token_hex(16), session, self.now()))
-        return self.get_run(identity, request), (book_prompt(context) + question, audio), True
+        return self.get_run(identity, request), (book_prompt(context, bool(params.get("_valet_book_tools"))) + question, audio), True
 
     def history(self, identity, params):
         session = self.session(identity, params.get("sessionKey"))

@@ -162,7 +162,7 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
 
                 if (reading?.context && frame.method === 'chat.send') {
                     if (typeof frame.params?.message !== 'string' || frame.params.message.length > 4096) return reject(frame.id, 'Invalid question');
-                    frame = {...frame, params: {...frame.params, message: bookPrompt(reading.context) + frame.params.message}};
+                    frame = {...frame, params: {...frame.params, message: bookPrompt(reading.context, Boolean(bookChannel)) + frame.params.message}};
                 }
             }
             if (frame.method === 'talk.session.create') {
@@ -183,7 +183,7 @@ export function createPassportConnection({sendUpstream, sendClient, close, now, 
                 if (reading?.context && frame.method === 'talk.client.toolCall') {
                     const args = frame.params?.args;
                     if (!args || typeof args !== 'object' || Array.isArray(args)) return reject(frame.id, 'Invalid consultation args');
-                    frame = {...frame, params:{...frame.params, args:{...args, context:bookPrompt(reading.context) + (typeof args.context === 'string' ? args.context : '')}}};
+                    frame = {...frame, params:{...frame.params, args:{...args, context:bookPrompt(reading.context, Boolean(bookChannel)) + (typeof args.context === 'string' ? args.context : '')}}};
                 }
                 if (frame.method === 'talk.session.appendAudio') {
                     const decoded = output.decodeAudio(frame.params.audioBase64);
