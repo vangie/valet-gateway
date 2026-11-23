@@ -8,6 +8,12 @@
   "activation": {
     "onStartup": true
   },
+  "contracts": {
+    "tools": [
+      "valet_book_search",
+      "valet_book_read"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

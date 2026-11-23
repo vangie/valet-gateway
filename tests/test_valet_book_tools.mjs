@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import {createPassportConnection} from '../tools/openclaw/passport-proxy.mjs';
+import {readFileSync} from 'node:fs';
 import {createBookRegistry, createBookTools, sessionTail, toolRequest, BOOK_SEARCH, BOOK_READ} from '../tools/openclaw/valet-book-tools.mjs';
 const id = 'a'.repeat(64), book = 'b'.repeat(32), other = 'c'.repeat(32);
 const key = `agent:passport:passport-${id}-book-${book}`;
 const context = {bookId: book, title: '水浒传', chapter: '第十一回', page: 649, text: '柴进道', truncated: false};
 
+const manifest = JSON.parse(readFileSync(new URL('../tools/openclaw/openclaw.plugin.json', import.meta.url)));
+assert.deepEqual(manifest.contracts?.tools, [BOOK_SEARCH, BOOK_READ], 'OpenClaw refuses agent tools not declared in contracts.tools');
 assert.equal(sessionTail(key), `passport-${id}-book-${book}`);
 assert.equal(sessionTail(`agent:Main:PASSPORT-${id}-book-${book}`), sessionTail(key));
 assert.deepEqual(toolRequest('search', {query: '宋万', limit: 5, extra: 1}), {op: 'search', query: '宋万', limit: 5, scope: 'all', fromChapter: undefined});
